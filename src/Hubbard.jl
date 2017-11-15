@@ -1,7 +1,10 @@
+__precompile__()
+
 module Hubbard
 
 export HubbardGlobalData
-export hubbard, set_time, groundstate, energy, double_occupation
+export hubbard, set_fac_diag, set_fac_offdiag
+export groundstate, energy, double_occupation
 
 mutable struct HubbardGlobalData 
     N_s    :: Int
@@ -22,9 +25,9 @@ mutable struct HubbardGlobalData
     tab_down     :: Dict{BitArray{1},Int}
     tab_inv_down :: Array{BitArray{1},1}
 
-    f :: Function
-    is_timedependent :: Bool
-    time :: Float64
+    fac_diag     :: Float64
+    fac_offdiag :: Complex{Float64}
+    is_complex   :: Bool
 end
 
 
@@ -158,15 +161,24 @@ function hubbard(N_s::Int, n_up::Int, n_down::Int, v::Array{Float64,2}, U::Float
     h =  HubbardGlobalData(N_s, n_up, n_down, N_up, N_down, N_psi, N_nz,
                            v, U, Float64[], spzeros(1,1),
                            tab_up, tab_inv_up, tab_down, tab_inv_down,
-                           f, false, 0.0)
+                           1.0, 1.0+0.0im, false)
     gen_H_diag(h)
     gen_H_upper(h)
     h
 end
 
-function set_time(h::HubbardGlobalData, t::Float64)
-    h.is_timedependent = true
-    h.time = t
+function set_fac_diag(h::HubbardGlobalData, f::Float64)
+    h.fac_diag = f
+end
+
+function set_fac_offdiag(h::HubbardGlobalData, f::Float64)
+    h.is_complex = false
+    h.fac_offdiag = f
+end
+
+function set_fac_offdiag(h::HubbardGlobalData, f::Complex{Float64})
+    h.is_complex = true 
+    h.fac_offdiag = f
 end
     
 
@@ -193,17 +205,17 @@ import Base: eltype, size
 
 
 function A_mul_B!(Y, h::HubbardGlobalData, B)
-    if h.is_timedependent
-        f = h.f(h.time)
-        Y[:] = h.H_diag.*B + f*h.H_upper*B + (f*B'*h.H_upper)'
+    if h.is_complex
+        Y[:] = h.fac_diag*(h.H_diag.*B) + h.fac_offdiag*(h.H_upper*B) + (h.fac_offdiag*B'*h.H_upper)'
     else
-        Y[:] = h.H_diag.*B + h.H_upper*B + (B'*h.H_upper)'
+        f = real(h.fac_offdiag)
+        Y[:] = h.fac_diag*(h.H_diag.*B) + f*(h.H_upper*B) + (f*B'*h.H_upper)'
     end
 end
 
 size(h::HubbardGlobalData) = (h.N_psi, h.N_psi)
-eltype(h::HubbardGlobalData) = h.is_timedependent?Complex{Float64}:Float64
-issymmetric(h::HubbardGlobalData) = !h.is_timedependent
+eltype(h::HubbardGlobalData) = h.is_complex?Complex{Float64}:Float64
+issymmetric(h::HubbardGlobalData) = !h.is_complex || imag(h.fac_offdiag)==0.0
 ishermitian(h::HubbardGlobalData) = true
 checksquare(h::HubbardGlobalData) = h.N_psi 
 
@@ -214,7 +226,7 @@ function groundstate(h::HubbardGlobalData)
 end
 
 function energy(h::HubbardGlobalData, psi::Union{Array{Complex{Float64},1},Array{Float64,1}})
-    T = h.is_timedependent?Complex{Float64}:eltype(psi)
+    T = h.is_complex?Complex{Float64}:eltype(psi)
     psi1 = zeros(T, h.N_psi)
     A_mul_B!(psi1, h, psi)
     real(dot(psi,psi1))

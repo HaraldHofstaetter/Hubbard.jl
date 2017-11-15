@@ -1,7 +1,7 @@
 module Hubbard
 
 export HubbardGlobalData
-export init_hubbard, groundstate, double_occupation
+export hubbard, set_time, groundstate, energy, double_occupation
 
 mutable struct HubbardGlobalData 
     N_s    :: Int
@@ -24,6 +24,10 @@ mutable struct HubbardGlobalData
 
     fac :: Float64
     shift :: Float64
+
+    f :: Function
+    is_timedependent :: Bool
+    time :: Float64
 end
 
 
@@ -140,7 +144,9 @@ function gen_H_diag(h::HubbardGlobalData)
     h.H_diag = d
 end
 
-function init_hubbard(N_s::Int, n_up::Int, n_down::Int, v::Array{Float64,2}, U::Float64)
+dummy_f(t::Float64) = 1.0+0.0im
+
+function hubbard(N_s::Int, n_up::Int, n_down::Int, v::Array{Float64,2}, U::Float64, f::Function=dummy_f)
     N_up = binomial(N_s, n_up)
     N_down = binomial(N_s, n_down)
     N_psi = N_up*N_down
@@ -157,24 +163,37 @@ function init_hubbard(N_s::Int, n_up::Int, n_down::Int, v::Array{Float64,2}, U::
     h =  HubbardGlobalData(N_s, n_up, n_down, N_up, N_down, N_psi, N_nz,
                            v, U, Float64[], spzeros(1,1),
                            tab_up, tab_inv_up, tab_down, tab_inv_down,
-                           fac, shift)
+                           fac, shift, 
+                           f, false, 0.0)
     gen_H_diag(h)
     gen_H_upper(h)
     h
 end
 
+function set_time(h::HubbardGlobalData, t::Float64)
+    h.is_timedependent = true
+    h.time = t
+end
+    
+
 function double_occupation(h::HubbardGlobalData, psi::Union{Array{Complex{Float64},1},Array{Float64,1}})
-    r = 0.0
+    r = zeros(h.N_s)
     for i_up = 1:h.N_up
         psi_up = h.tab_inv_up[i_up]
         for i_down = 1:h.N_down
             i = (i_up-1)*h.N_down + i_down
             psi_down = h.tab_inv_down[i_down]
-            r += sum(psi_up .& psi_down) * abs(psi[i])^2
+            f = abs(psi[i])^2
+            for k=1:h.N_s
+                if psi_up[k] & psi_down[k]
+                    r[k] += f
+                end
+            end
         end
     end
     r
 end
+
 
 
 
@@ -183,7 +202,12 @@ import Base: eltype, size
 
 
 function A_mul_B!(Y, h::HubbardGlobalData, B)
-    Y[:] = h.H_diag.*B + h.H_upper*B + (B'*h.H_upper)'
+    if h.is_timedependent
+        f = h.f(h.time)
+        Y[:] = h.H_diag.*B + f*h.H_upper*B + (f*B'*h.H_upper)'
+    else
+        Y[:] = h.H_diag.*B + h.H_upper*B + (B'*h.H_upper)'
+    end
     if h.fac!=1.0
         Y[:] *= h.fac
     end    
@@ -193,8 +217,9 @@ function A_mul_B!(Y, h::HubbardGlobalData, B)
 end
 
 size(h::HubbardGlobalData) = (h.N_psi, h.N_psi)
-eltype(h::HubbardGlobalData) = Float64
-issymmetric(h::HubbardGlobalData) = true
+eltype(h::HubbardGlobalData) = h.is_timedependent?Complex{Float64}:Float64
+issymmetric(h::HubbardGlobalData) = !h.is_timedependent
+ishermitian(h::HubbardGlobalData) = true
 checksquare(h::HubbardGlobalData) = h.N_psi 
 
 function groundstate(h::HubbardGlobalData)
@@ -202,8 +227,8 @@ function groundstate(h::HubbardGlobalData)
     h.shift = 0.0 
     lambda,g = eigs(h, nev=1)
     lambda = lambda[1]
-    if lambda>=0
-        rho = lambda
+    rho = real(lambda)
+    if rho>=0
         h.fac = -1.0
         h.shift = rho
         lambda,g = eigs(h, nev=1)
@@ -212,6 +237,13 @@ function groundstate(h::HubbardGlobalData)
     h.fac = 1.0
     h.shift = 0.0 
     lambda, g[:,1]
+end
+
+function energy(h::HubbardGlobalData, psi::Union{Array{Complex{Float64},1},Array{Float64,1}})
+    T = eltype(psi)
+    psi1 = zeros(T, h.N_psi)
+    A_mul_B!(psi1, h, psi)
+    real(dot(psi,psi1))
 end
 
 end

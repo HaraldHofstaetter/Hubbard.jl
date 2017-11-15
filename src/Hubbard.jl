@@ -22,9 +22,6 @@ mutable struct HubbardGlobalData
     tab_down     :: Dict{BitArray{1},Int}
     tab_inv_down :: Array{BitArray{1},1}
 
-    fac :: Float64
-    shift :: Float64
-
     f :: Function
     is_timedependent :: Bool
     time :: Float64
@@ -158,12 +155,9 @@ function hubbard(N_s::Int, n_up::Int, n_down::Int, v::Array{Float64,2}, U::Float
     else
         tab_down, tab_inv_down = gen_tabs(N_s, n_down)
     end
-    fac = 1.0
-    shift = 0.0
     h =  HubbardGlobalData(N_s, n_up, n_down, N_up, N_down, N_psi, N_nz,
                            v, U, Float64[], spzeros(1,1),
                            tab_up, tab_inv_up, tab_down, tab_inv_down,
-                           fac, shift, 
                            f, false, 0.0)
     gen_H_diag(h)
     gen_H_upper(h)
@@ -194,9 +188,6 @@ function double_occupation(h::HubbardGlobalData, psi::Union{Array{Complex{Float6
     r
 end
 
-
-
-
 import Base.LinAlg: A_mul_B!, issymmetric, checksquare
 import Base: eltype, size
 
@@ -208,12 +199,6 @@ function A_mul_B!(Y, h::HubbardGlobalData, B)
     else
         Y[:] = h.H_diag.*B + h.H_upper*B + (B'*h.H_upper)'
     end
-    if h.fac!=1.0
-        Y[:] *= h.fac
-    end    
-    if h.shift!=0.0
-        Y[:] += h.shift*B
-    end
 end
 
 size(h::HubbardGlobalData) = (h.N_psi, h.N_psi)
@@ -223,24 +208,13 @@ ishermitian(h::HubbardGlobalData) = true
 checksquare(h::HubbardGlobalData) = h.N_psi 
 
 function groundstate(h::HubbardGlobalData)
-    h.fac = 1.0
-    h.shift = 0.0 
-    lambda,g = eigs(h, nev=1)
+    lambda,g = eigs(h, nev=1, which=:SR)
     lambda = lambda[1]
-    rho = real(lambda)
-    if rho>=0
-        h.fac = -1.0
-        h.shift = rho
-        lambda,g = eigs(h, nev=1)
-        lambda = rho-lambda[1]   
-    end    
-    h.fac = 1.0
-    h.shift = 0.0 
-    lambda, g[:,1]
+    real(lambda[1]), g[:,1]
 end
 
 function energy(h::HubbardGlobalData, psi::Union{Array{Complex{Float64},1},Array{Float64,1}})
-    T = eltype(psi)
+    T = h.is_timedependent?Complex{Float64}:eltype(psi)
     psi1 = zeros(T, h.N_psi)
     A_mul_B!(psi1, h, psi)
     real(dot(psi,psi1))

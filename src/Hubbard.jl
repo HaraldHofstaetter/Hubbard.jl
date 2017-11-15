@@ -2,11 +2,11 @@ __precompile__()
 
 module Hubbard
 
-export HubbardGlobalData
+export HubbardHamiltonian
 export hubbard, set_fac_diag, set_fac_offdiag
 export groundstate, energy, double_occupation
 
-mutable struct HubbardGlobalData 
+mutable struct HubbardHamiltonian 
     N_s    :: Int
     n_up   :: Int
     n_down :: Int
@@ -92,7 +92,7 @@ function get_sign_down(psi_up::BitArray{1}, psi_down::BitArray{1}, hop::Tuple{In
     isodd(s) ? -1 : +1
 end
 
-function gen_H_upper(h::HubbardGlobalData)
+function gen_H_upper(h::HubbardHamiltonian)
     I = zeros(Int, h.N_nz)
     J = zeros(Int, h.N_nz)
     x = zeros(Float64, h.N_nz)
@@ -127,7 +127,7 @@ function gen_H_upper(h::HubbardGlobalData)
     h.H_upper = sparse(I[1:n], J[1:n], x[1:n], h.N_psi, h.N_psi) 
 end
 
-function gen_H_diag(h::HubbardGlobalData)
+function gen_H_diag(h::HubbardHamiltonian)
     d = zeros(h.N_psi)
     for i_up = 1:h.N_up 
         psi_up = h.tab_inv_up[i_up]
@@ -158,7 +158,7 @@ function hubbard(N_s::Int, n_up::Int, n_down::Int, v::Array{Float64,2}, U::Float
     else
         tab_down, tab_inv_down = gen_tabs(N_s, n_down)
     end
-    h =  HubbardGlobalData(N_s, n_up, n_down, N_up, N_down, N_psi, N_nz,
+    h =  HubbardHamiltonian(N_s, n_up, n_down, N_up, N_down, N_psi, N_nz,
                            v, U, Float64[], spzeros(1,1),
                            tab_up, tab_inv_up, tab_down, tab_inv_down,
                            1.0, 1.0+0.0im, false)
@@ -167,22 +167,22 @@ function hubbard(N_s::Int, n_up::Int, n_down::Int, v::Array{Float64,2}, U::Float
     h
 end
 
-function set_fac_diag(h::HubbardGlobalData, f::Float64)
+function set_fac_diag(h::HubbardHamiltonian, f::Float64)
     h.fac_diag = f
 end
 
-function set_fac_offdiag(h::HubbardGlobalData, f::Float64)
+function set_fac_offdiag(h::HubbardHamiltonian, f::Float64)
     h.is_complex = false
     h.fac_offdiag = f
 end
 
-function set_fac_offdiag(h::HubbardGlobalData, f::Complex{Float64})
+function set_fac_offdiag(h::HubbardHamiltonian, f::Complex{Float64})
     h.is_complex = true 
     h.fac_offdiag = f
 end
     
 
-function double_occupation(h::HubbardGlobalData, psi::Union{Array{Complex{Float64},1},Array{Float64,1}})
+function double_occupation(h::HubbardHamiltonian, psi::Union{Array{Complex{Float64},1},Array{Float64,1}})
     r = zeros(h.N_s)
     for i_up = 1:h.N_up
         psi_up = h.tab_inv_up[i_up]
@@ -204,7 +204,7 @@ import Base.LinAlg: A_mul_B!, issymmetric, checksquare
 import Base: eltype, size
 
 
-function A_mul_B!(Y, h::HubbardGlobalData, B)
+function A_mul_B!(Y, h::HubbardHamiltonian, B)
     if h.is_complex
         Y[:] = h.fac_diag*(h.H_diag.*B) + h.fac_offdiag*(h.H_upper*B) + (h.fac_offdiag*B'*h.H_upper)'
     else
@@ -213,19 +213,19 @@ function A_mul_B!(Y, h::HubbardGlobalData, B)
     end
 end
 
-size(h::HubbardGlobalData) = (h.N_psi, h.N_psi)
-eltype(h::HubbardGlobalData) = h.is_complex?Complex{Float64}:Float64
-issymmetric(h::HubbardGlobalData) = !h.is_complex || imag(h.fac_offdiag)==0.0
-ishermitian(h::HubbardGlobalData) = true
-checksquare(h::HubbardGlobalData) = h.N_psi 
+size(h::HubbardHamiltonian) = (h.N_psi, h.N_psi)
+eltype(h::HubbardHamiltonian) = h.is_complex?Complex{Float64}:Float64
+issymmetric(h::HubbardHamiltonian) = !h.is_complex || imag(h.fac_offdiag)==0.0
+ishermitian(h::HubbardHamiltonian) = true
+checksquare(h::HubbardHamiltonian) = h.N_psi 
 
-function groundstate(h::HubbardGlobalData)
+function groundstate(h::HubbardHamiltonian)
     lambda,g = eigs(h, nev=1, which=:SR)
     lambda = lambda[1]
     real(lambda[1]), g[:,1]
 end
 
-function energy(h::HubbardGlobalData, psi::Union{Array{Complex{Float64},1},Array{Float64,1}})
+function energy(h::HubbardHamiltonian, psi::Union{Array{Complex{Float64},1},Array{Float64,1}})
     T = h.is_complex?Complex{Float64}:eltype(psi)
     psi1 = zeros(T, h.N_psi)
     A_mul_B!(psi1, h, psi)

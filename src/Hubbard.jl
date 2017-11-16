@@ -15,8 +15,8 @@ mutable struct HubbardHamiltonian
     N_psi  :: Int
     N_nz   :: Int
 
-    v :: Array{Float64, 2}
-    U :: Float64
+    v      :: Array{Float64, 2}
+    U      :: Float64
     H_diag :: Array{Float64, 1}
     H_upper ::  SparseMatrixCSC{Float64, Int}
 
@@ -26,8 +26,9 @@ mutable struct HubbardHamiltonian
     tab_inv_down :: Array{BitArray{1},1}
 
     fac_diag     :: Float64
-    fac_offdiag :: Complex{Float64}
+    fac_offdiag  :: Complex{Float64}
     is_complex   :: Bool
+    mult_by_minus_i :: Bool
 end
 
 
@@ -161,7 +162,7 @@ function hubbard(N_s::Int, n_up::Int, n_down::Int, v::Array{Float64,2}, U::Float
     h =  HubbardHamiltonian(N_s, n_up, n_down, N_up, N_down, N_psi, N_nz,
                            v, U, Float64[], spzeros(1,1),
                            tab_up, tab_inv_up, tab_down, tab_inv_down,
-                           1.0, 1.0+0.0im, false)
+                           1.0, 1.0+0.0im, false, false)
     gen_H_diag(h)
     gen_H_upper(h)
     h
@@ -201,7 +202,7 @@ function double_occupation(h::HubbardHamiltonian, psi::Union{Array{Complex{Float
 end
 
 import Base.LinAlg: A_mul_B!, issymmetric, checksquare
-import Base: eltype, size
+import Base: eltype, size, norm
 
 
 function A_mul_B!(Y, h::HubbardHamiltonian, B)
@@ -211,12 +212,17 @@ function A_mul_B!(Y, h::HubbardHamiltonian, B)
         f = real(h.fac_offdiag)
         Y[:] = h.fac_diag*(h.H_diag.*B) + f*(h.H_upper*B) + (f*B'*h.H_upper)'
     end
+    if h.multiply_by_minus_i
+        Y[:] *= -1im
+    end
 end
 
 size(h::HubbardHamiltonian) = (h.N_psi, h.N_psi)
+size(h::HubbardHamiltonian, dim::Int) = dim<1?error("arraysize: dimension out of range"):
+                                       (dim<3?h.N.psi:1)
 eltype(h::HubbardHamiltonian) = h.is_complex?Complex{Float64}:Float64
 issymmetric(h::HubbardHamiltonian) = !h.is_complex || imag(h.fac_offdiag)==0.0
-ishermitian(h::HubbardHamiltonian) = true
+ishermitian(h::HubbardHamiltonian) = !h.multiply_by_minus_i 
 checksquare(h::HubbardHamiltonian) = h.N_psi 
 
 function groundstate(h::HubbardHamiltonian)
@@ -230,6 +236,26 @@ function energy(h::HubbardHamiltonian, psi::Union{Array{Complex{Float64},1},Arra
     psi1 = zeros(T, h.N_psi)
     A_mul_B!(psi1, h, psi)
     real(dot(psi,psi1))
+end
+
+function norm(h::HubbardHamiltonian, p::Real=2)
+    if p==2
+        throw(ArgumentError("2-norm not implemented for HubbardHamiltonian. Try norm(h, p) where p=1 or Inf."))
+    elseif !(p==1 || p==Inf)
+        throw(ArgumentError("invalid p-norm p=$p. Valid: 1, Inf"))
+    end
+    s = zeros(h.N_psi)
+    for j = 1:h.N_psi
+        for i = h.H_upper.colptr[j]:h.H_upper.colptr[j+1]-1
+            s[j] += abs(h.H_upper.nzval[i])
+        end
+    end
+    for i=1:length(h.H_upper.nzval)
+        s[h.H_upper.rowval[i]] += abs(h.H_upper.nzval[i])
+    end    
+    s[:] *= abs(h.fac_offdiag)
+    s[:] += abs(h.fac_diag)*abs.(h.H_diag)
+    maximum(s)
 end
 
 end

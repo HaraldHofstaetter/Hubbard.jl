@@ -28,7 +28,7 @@ mutable struct HubbardHamiltonian
     fac_diag     :: Float64
     fac_offdiag  :: Complex{Float64}
     is_complex   :: Bool
-    mult_by_minus_i :: Bool
+    multiply_by_minus_i :: Bool
 end
 
 
@@ -201,25 +201,25 @@ function double_occupation(h::HubbardHamiltonian, psi::Union{Array{Complex{Float
     r
 end
 
-import Base.LinAlg: A_mul_B!, issymmetric, checksquare
+import Base.LinAlg: A_mul_B!, issymmetric, ishermitian, checksquare
 import Base: eltype, size, norm
 
 
 function A_mul_B!(Y, h::HubbardHamiltonian, B)
     if h.is_complex
         Y[:] = h.fac_diag*(h.H_diag.*B) + h.fac_offdiag*(h.H_upper*B) + (h.fac_offdiag*B'*h.H_upper)'
+        if h.multiply_by_minus_i
+            Y[:] *= -1im
+        end
     else
         f = real(h.fac_offdiag)
         Y[:] = h.fac_diag*(h.H_diag.*B) + f*(h.H_upper*B) + (f*B'*h.H_upper)'
-    end
-    if h.multiply_by_minus_i
-        Y[:] *= -1im
     end
 end
 
 size(h::HubbardHamiltonian) = (h.N_psi, h.N_psi)
 size(h::HubbardHamiltonian, dim::Int) = dim<1?error("arraysize: dimension out of range"):
-                                       (dim<3?h.N.psi:1)
+                                       (dim<3?h.N_psi:1)
 eltype(h::HubbardHamiltonian) = h.is_complex?Complex{Float64}:Float64
 issymmetric(h::HubbardHamiltonian) = !h.is_complex || imag(h.fac_offdiag)==0.0
 ishermitian(h::HubbardHamiltonian) = !h.multiply_by_minus_i 

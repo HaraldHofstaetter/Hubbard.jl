@@ -5,6 +5,7 @@ module Hubbard
 export HubbardHamiltonian
 export hubbard, set_fac_diag, set_fac_offdiag
 export groundstate, energy, double_occupation
+export get_dims
 
 mutable struct HubbardHamiltonian 
     N_s    :: Int
@@ -93,6 +94,123 @@ function get_sign_down(psi_up::BitArray{1}, psi_down::BitArray{1}, hop::Tuple{In
     isodd(s) ? -1 : +1
 end
 
+
+function get_dims(h::HubbardHamiltonian)
+    i_up = 1
+    psi_up = h.tab_inv_up[i_up]
+    psi1_hops_up = differ_by_1_entry(psi_up)
+    nn_down = zeros(Int, h.N_down)
+    for i_down = 1:h.N_down
+        psi_down = h.tab_inv_down[i_down]
+        i = (i_up-1)*h.N_down + i_down
+        for (psi_new, hop) in psi1_hops_up
+            j = (h.tab_up[psi_new]-1)*h.N_down + i_down
+            if j>i #&& h.v[hop[1], hop[2]]!=0.0
+                nn_down[i_down] += 1
+            end
+        end
+        psi1_hops_down = differ_by_1_entry(psi_down)
+        for (psi_new, hop) in psi1_hops_down
+            j = (i_up-1)*h.N_down + h.tab_down[psi_new]
+            if j>i #&& h.v[hop[1], hop[2]]!=0.0
+                nn_down[i_down] += 1
+            end
+        end            
+    end
+
+    i_down = 1
+    psi_down = h.tab_inv_down[i_down]
+    psi1_hops_down = differ_by_1_entry(psi_down)
+    nn_up = zeros(Int, h.N_up)
+    for i_up = 1:h.N_up
+        psi_up = h.tab_inv_up[i_up]
+        i = (i_down-1)*h.N_up + i_up
+        for (psi_new, hop) in psi1_hops_down
+            j = (h.tab_down[psi_new]-1)*h.N_up + i_up
+            if j>i #&& h.v[hop[1], hop[2]]!=0.0
+                nn_up[i_up] += 1
+            end
+        end
+        psi1_hops_up = differ_by_1_entry(psi_up)
+        for (psi_new, hop) in psi1_hops_up
+            j = (i_down-1)*h.N_up + h.tab_up[psi_new]
+            if j>i #&& h.v[hop[1], hop[2]]!=0.0
+                nn_up[i_up] += 1
+            end
+        end            
+    end
+    vcat(0, cumsum([ sum(nn_down-(nn_down[1]-n)) for n in nn_up]))
+end
+
+function gen_H_upper_step(i_up::Int, h::HubbardHamiltonian, nn, I, J, x)
+    n = nn[i_up]
+    psi_up = h.tab_inv_up[i_up]
+    psi1_hops_up = differ_by_1_entry(psi_up)
+    for i_down = 1:h.N_down
+        psi_down = h.tab_inv_down[i_down]
+        i = (i_up-1)*h.N_down + i_down
+        for (psi_new, hop) in psi1_hops_up
+            j = (h.tab_up[psi_new]-1)*h.N_down + i_down
+            if j>i #&& h.v[hop[1], hop[2]]!=0.0
+                n += 1
+                I[n] = i
+                J[n] = j
+                x[n] = h.v[hop[1], hop[2]] #* get_sign_up(psi_new, psi_down, hop)
+            end
+        end
+        psi1_hops_down = differ_by_1_entry(psi_down)
+        for (psi_new, hop) in psi1_hops_down
+            j = (i_up-1)*h.N_down + h.tab_down[psi_new]
+            if j>i #&& h.v[hop[1], hop[2]]!=0.0
+                n += 1
+                I[n] = i
+                J[n] = j
+                x[n] = h.v[hop[1], hop[2]] #* get_sign_down(psi_up, psi_new, hop)
+            end
+        end            
+    end
+end
+
+function gen_H_upper_parallel(h::HubbardHamiltonian)
+    nn = get_dims(h)
+    I = SharedArray{Int,1}(h.N_nz)
+    J = SharedArray{Int,1}(h.N_nz)
+    x = SharedArray{Float64,1}(h.N_nz)
+    pmap(n->gen_H_upper_step(n, h, nn, I, J, x), 1:h.N_down) 
+    nz = 0
+    for n=1:nn[end]
+        if x[n]!=0.0
+            nz += 1
+            I[nz] = I[n]
+            J[nz] = J[n]
+            x[nz] = x[n]
+        end
+    end
+    h.H_upper = sparse(I[1:nz], J[1:nz], x[1:nz], h.N_psi, h.N_psi) 
+end
+
+function gen_H_diag_parallel(h::HubbardHamiltonian)
+    d = SharedArray{Float64,1}(h.N_psi)
+    @parallel for i_up = 1:h.N_up 
+        psi_up = h.tab_inv_up[i_up]
+        x_up = sum([ h.v[k,k] for k=1:h.N_s if psi_up[k] ]) 
+
+        for i_down = 1:h.N_down 
+            psi_down = h.tab_inv_down[i_down]
+            i = (i_up-1)*h.N_down + i_down
+            x = x_up + sum([ h.v[k,k] for k=1:h.N_s if psi_down[k] ]) 
+            x += sum([h.U for k=1:h.N_s if psi_down[k] && psi_up[k]])
+            d[i] = x
+        end
+    end
+    h.H_diag = sdata(d)
+end
+
+
+
+
+
+
 function gen_H_upper(h::HubbardHamiltonian)
     I = zeros(Int, h.N_nz)
     J = zeros(Int, h.N_nz)
@@ -106,7 +224,7 @@ function gen_H_upper(h::HubbardHamiltonian)
             i = (i_up-1)*h.N_down + i_down
             for (psi_new, hop) in psi1_hops_up
                 j = (h.tab_up[psi_new]-1)*h.N_down + i_down
-                if j>i && h.v[hop[1], hop[2]]!=0.0
+                if j>i #&& h.v[hop[1], hop[2]]!=0.0
                     n += 1
                     I[n] = i
                     J[n] = j
@@ -116,7 +234,7 @@ function gen_H_upper(h::HubbardHamiltonian)
             psi1_hops_down = differ_by_1_entry(psi_down)
             for (psi_new, hop) in psi1_hops_down
                 j = (i_up-1)*h.N_down + h.tab_down[psi_new]
-                if j>i && h.v[hop[1], hop[2]]!=0.0
+                if j>i #&& h.v[hop[1], hop[2]]!=0.0
                     n += 1
                     I[n] = i
                     J[n] = j
@@ -163,8 +281,13 @@ function hubbard(N_s::Int, n_up::Int, n_down::Int, v::Array{Float64,2}, U::Float
                            v, U, Float64[], spzeros(1,1),
                            tab_up, tab_inv_up, tab_down, tab_inv_down,
                            1.0, 1.0+0.0im, false, false)
-    gen_H_diag(h)
-    gen_H_upper(h)
+    if nprocs()>1
+        gen_H_diag_parallel(h)
+        gen_H_upper_parallel(h)
+    else
+        gen_H_diag(h)
+        gen_H_upper(h)
+    end
     h
 end
 

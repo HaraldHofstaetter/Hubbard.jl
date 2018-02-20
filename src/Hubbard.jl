@@ -31,7 +31,10 @@ mutable struct HubbardHamiltonian
     fac_diag     :: Float64
     fac_symm     :: Float64
     fac_anti     :: Float64
-    multiply_by_minus_i :: Bool
+    matrix_times_minus_i :: Bool
+
+    wsp  :: Array{Complex{Float64},1}  # workspace for expokit
+    iwsp :: Array{Int32,1}    # workspace for expokit
 end
 
 
@@ -294,7 +297,7 @@ function hubbard(N_s::Int, n_up::Int, n_down::Int, v_symm::Array{Float64,2}, v_a
     h =  HubbardHamiltonian(N_s, n_up, n_down, N_up, N_down, N_psi, N_nz,
                            v_symm, v_anti, U, Float64[], spzeros(1,1), spzeros(1,1),
                            tab_up, tab_inv_up, tab_down, tab_inv_down,
-                           1.0, 1.0, 0.0, false)
+                           1.0, 1.0, 0.0, false, Complex{Float64}[], Int32[])
     if nprocs()>1
         gen_H_diag_parallel(h)
         gen_H_upper_parallel(h)
@@ -347,7 +350,7 @@ function A_mul_B!(Y, h::HubbardHamiltonian, B)
         Y[:] = h.fac_diag*(h.H_diag.*B) + h.fac_symm*(h.H_upper_symm*B) + (h.fac_symm*B'*h.H_upper_symm)' + 
                                      1im*(h.fac_anti*(h.H_upper_anti*B) - (h.fac_anti*B'*h.H_upper_anti)')  
     end
-    if h.multiply_by_minus_i
+    if h.matrix_times_minus_i
         Y[:] *= -1im
     end
 end
@@ -357,7 +360,7 @@ size(h::HubbardHamiltonian, dim::Int) = dim<1?error("arraysize: dimension out of
                                        (dim<3?h.N_psi:1)
 eltype(h::HubbardHamiltonian) = h.fac_anti!=0.0?Complex{Float64}:Float64
 issymmetric(h::HubbardHamiltonian) = h.fac_anti==0.0 
-ishermitian(h::HubbardHamiltonian) = !h.multiply_by_minus_i 
+ishermitian(h::HubbardHamiltonian) = !h.matrix_times_minus_i 
 checksquare(h::HubbardHamiltonian) = h.N_psi 
 
 function groundstate(h::HubbardHamiltonian)

@@ -94,3 +94,80 @@ function Base.next(ets::EquidistantTimeStepper, t)
     t1, t1
 end
 
+
+function Gamma4!(h::HubbardHamiltonian,
+                 r::Vector{Complex{Float64}}, u::Vector{Complex{Float64}}, 
+                 t::Float64, b::Float64, f::Complex{Float64}, fd::Complex{Float64}
+    set_fac_diag(h, b) 
+    A = fd
+    B = f
+    n = size(h, 2)
+    s1 = unsafe_wrap(Array, pointer(h.wsp, 1),   n, own=false)
+    s2 = unsafe_wrap(Array, pointer(h.wsp, n+1), n, own=false)
+
+    # s1 = B*u
+      set_fac_offdiag(h, B)
+      A_mul_B!(s1, h, u)
+    # r = c_B*s1, c_B=1 
+      r[:] = s1[:] # copy
+    # s2 = A*u
+      set_fac_offdiag(h, A)
+      A_mul_B!(s2, h, u)
+    # r += c_A*s2, c_A=t 
+      BLAS.axpy!(t, s2, r)
+    # s2 = B*s2
+      set_fac_offdiag(h, B)
+      A_mul_B!(s2, h, s2)
+    # r += c_BA*s2, c_BA=-1/2*t^2 
+      BLAS.axpy!(-t^2/2, s2, r)
+    # s2 = B*s2
+      set_fac_offdiag(h, B)
+      A_mul_B!(s2, h, s2)
+    # r += c_BBA*s2, c_BBA=1/6*t^3
+      BLAS.axpy!(t^3/6, s2, r)
+    # s2 = B*s2
+      set_fac_offdiag(h, B)
+      A_mul_B!(s2, h, s2)
+    # r += c_BBBA*s2, c_BBBA=1/24*t^4
+      BLAS.axpy!(t^4/24, s2, r)
+
+    # s2 = A*s1
+      set_fac_offdiag(h, A)
+      A_mul_B!(s2, h, s1)
+    # r += c_AB*s2, c_AB=1/2*t^2
+      BLAS.axpy!(t^2/2, s2, r)
+    # s2 = B*s2
+      set_fac_offdiag(h, B)
+      A_mul_B!(s2, h, s2)
+    # r += c_BAB*s2, c_BAB=-1/3*t^3
+      BLAS.axpy!(-t^3/3, s2, r)
+    # s2 = B*s2
+      set_fac_offdiag(h, B)
+      A_mul_B!(s2, h, s2)
+    # r += c_BBAB*s2, c_BBAB=-1/8*t^4
+      BLAS.axpy!(-t^4/8, s2, r)
+
+    # s2 = B*s1
+      set_fac_offdiag(h, B)
+      A_mul_B!(s2, h, s1)
+    # s1 = A*s2
+      set_fac_offdiag(h, A)
+      A_mul_B!(s1, h, s2)
+    # r += c_ABB*s1, c_ABB=1/6t^3 
+      BLAS.axpy!(t^3/6, s1, r)
+    # s1 = B*s1
+      set_fac_offdiag(h, B)
+      A_mul_B!(s1, h, s1)
+    # r += c_BABB*s1, c_BABB=1/8t^4
+      BLAS.axpy!(t^4/8, s1, r)
+
+    # s1 = B*s2
+      set_fac_offdiag(h, B)
+      A_mul_B!(s1, h, s2)
+    # s1 = A*s1
+      set_fac_offdiag(h, A)
+      A_mul_B!(s1, h, s1)
+    # r += c_ABBB*s1, c_ABBB=-1/24*t^4 
+      BLAS.axpy!(-t^4/24, s1, r)
+
+end

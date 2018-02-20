@@ -17,8 +17,7 @@ CF4 = CommutatorFreeScheme(
 function step!(psi::Array{Complex{Float64},1}, h::HubbardHamiltonian, f::Function, 
                t::Real, dt::Real, scheme, b::Array{Float64,1}, norm_inf::Float64)
     fac_diag_save = h.fac_diag
-    fac_symm_save = h.fac_symm
-    fac_anti_save = h.fac_anti
+    fac_offdiag_save = h.fac_offdiag
     matrix_times_minus_i_save = h.matrix_times_minus_i
 
     J,K = size(scheme.A)
@@ -26,8 +25,7 @@ function step!(psi::Array{Complex{Float64},1}, h::HubbardHamiltonian, f::Functio
     for j=1:J
         fac = sum(scheme.A[j,:].*f.(t+dt*scheme.c))
         set_fac_diag(h, b[j]) 
-        set_fac_symm(h, real(fac))
-        set_fac_anti(h, imag(fac))
+        set_fac_offdiag(h, fac)
 
         expv!(psi, dt, h, psi, anorm=norm_inf, 
               matrix_times_minus_i=true, hermitian=true,
@@ -36,8 +34,7 @@ function step!(psi::Array{Complex{Float64},1}, h::HubbardHamiltonian, f::Functio
     end
     
     h.fac_diag = fac_diag_save
-    h.fac_symm = fac_symm_save
-    h.fac_anti = fac_anti_save
+    h.fac_offdiag = fac_offdiag_save
     h.matrix_times_minus_i = matrix_times_minus_i_save
 end    
 
@@ -55,22 +52,19 @@ struct EquidistantTimeStepper
                  psi::Array{Complex{Float64},1},
                  t0::Real, tend::Real, dt::Real; scheme=CF4)
         fac_diag_save = h.fac_diag
-        fac_symm_save = h.fac_symm
-        fac_anti_save = h.fac_anti
+        fac_offdiag_save = h.fac_offdiag
         matrix_times_minus_i_save =  h.matrix_times_minus_i
 
         b = [sum(scheme.A[j,:]) for j=1:size(scheme.A,1)]
 
         h.fac_diag = 1.0
-        h.fac_symm = 1.0
-        h.fac_anti = 0.0
+        h.fac_offdiag = 1.0
         h.matrix_times_minus_i = false 
     
         norm_inf = norm(h, Inf)
         
         h.fac_diag = fac_diag_save
-        h.fac_symm = fac_symm_save
-        h.fac_anti = fac_anti_save
+        h.fac_offdiag = fac_offdiag_save
         h.matrix_times_minus_i = matrix_times_minus_i_save
 
         # allocate workspace

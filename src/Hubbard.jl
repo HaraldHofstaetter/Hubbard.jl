@@ -282,7 +282,7 @@ function gen_H_diag(h::HubbardHamiltonian)
 end
 
 
-function hubbard(N_s::Int, n_up::Int, n_down::Int, v_symm::Array{Float64,2}, v_anti::Array{Float64,2}, U::Float64)
+function hubbard(N_s::Int, n_up::Int, n_down::Int, v_symm::Array{Float64,2}, v_anti::Array{Float64,2}, U::Real)
     N_up = binomial(N_s, n_up)
     N_down = binomial(N_s, n_down)
     N_psi = N_up*N_down

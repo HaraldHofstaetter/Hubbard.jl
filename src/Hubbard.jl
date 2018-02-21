@@ -3,7 +3,8 @@ __precompile__()
 module Hubbard
 
 export HubbardHamiltonian
-export hubbard, set_fac_diag, set_fac_offdiag 
+export hubbard, set_fac_diag!, set_fac_offdiag!
+export save_state, restore_state!
 export groundstate, energy, double_occupation
 export get_dims
 
@@ -307,11 +308,17 @@ function hubbard(N_s::Int, n_up::Int, n_down::Int, v_symm::Array{Float64,2}, v_a
     h
 end
 
-function set_fac_diag(h::HubbardHamiltonian, f::Float64)
+save_state(h::HubbardHamiltonian) = (h.fac_diag, h.fac_offdiag, h.matrix_times_minus_i) 
+
+function restore_state!(h::HubbardHamiltonian, state)
+    (h.fac_diag, h.fac_offdiag, h.matrix_times_minus_i) = state
+end
+
+function set_fac_diag!(h::HubbardHamiltonian, f::Real)
     h.fac_diag = f
 end
 
-function set_fac_offdiag(h::HubbardHamiltonian, f::Complex{Float64})
+function set_fac_offdiag!(h::HubbardHamiltonian, f::Number)
     h.fac_offdiag = f
 end
 

@@ -318,7 +318,7 @@ end
 
 function set_fac!(h::HubbardHamiltonian, fd::Real, fo::Number)
     h.fac_diag = fd
-    h.fac_offdiag = fd
+    h.fac_offdiag = fo
 end
 
 function set_fac_diag!(h::HubbardHamiltonian, f::Real)

@@ -152,7 +152,6 @@ function local_orders_est(h::HubbardHamiltonian, f::Function, fd::Function,
         end    
         err = norm(psi-psi_ref)
         err_est = norm(psi-psi_ref-psi_est)
-        err_est = norm(psi_est)
         if (row==1) 
             @printf("%3i%12.3e%12.3e\n", row, Float64(dt1), Float64(err))
             tab[row,1] = dt1
@@ -191,26 +190,26 @@ function Gamma2!(r::Vector{Complex{Float64}}, h::HubbardHamiltonian,
     s2 = unsafe_wrap(Array, pointer(h.wsp, 2*n+1), n, false)
 
     # s1 = B*u
-      set_fac!(h, 1.0, B)
+      set_fac!(h, 0.5, B)
       A_mul_B!(s1, h, u)
     # r = c_B*s1, c_B=1 
       r[:] = s1[:] # copy
     # s2 = A*u
       set_fac!(h, 0.0, A)
       A_mul_B!(s2, h, u)
-    # r += c_A*s2, c_A=dt 
-      BLAS.axpy!(dt, s2, r)
+    # r += 1/2*c_A*s2, c_A=dt 
+      BLAS.axpy!(dt/2, s2, r)
     # s2 = B*s2
-      set_fac!(h, 1.0, B)
+      set_fac!(h, 0.5, B)
       A_mul_B!(s2, h, s2)
-    # r += c_BA*s2, c_BA=1/2*dt^2 
-      BLAS.axpy!(dt^2/2, s2, r)
+    # r += 1/2*c_BA*s2, c_BA=1/2*dt^2 
+      BLAS.axpy!(+dt^2/4, s2, r)
 
     # s2 = A*s1
       set_fac!(h, 0.0, A)
       A_mul_B!(s2, h, s1)
-    # r += c_AB*s2, c_AB=-1/2*dt^2
-      BLAS.axpy!(-dt^2/2, s2, r)
+    # r += 1/2*c_AB*s2, c_AB=-1/2*dt^2
+      BLAS.axpy!(-dt^2/4, s2, r)
 end
 
 

@@ -3,7 +3,7 @@ __precompile__()
 module Hubbard
 
 export HubbardHamiltonian
-export hubbard, set_fac_diag!, set_fac_offdiag!
+export hubbard, set_fac!, set_fac_diag!, set_fac_offdiag!
 export save_state, restore_state!
 export groundstate, energy, double_occupation
 export get_dims
@@ -35,6 +35,7 @@ mutable struct HubbardHamiltonian
 
     wsp  :: Array{Complex{Float64},1}  # workspace for expokit
     iwsp :: Array{Int32,1}    # workspace for expokit
+    norm :: Float64  # Inf-Norm of H for fac_diag = fac_offdiag = 1, needed by expokit
 end
 
 
@@ -297,7 +298,7 @@ function hubbard(N_s::Int, n_up::Int, n_down::Int, v_symm::Array{Float64,2}, v_a
     h =  HubbardHamiltonian(N_s, n_up, n_down, N_up, N_down, N_psi, N_nz,
                            v_symm, v_anti, U, Float64[], spzeros(1,1), spzeros(1,1),
                            tab_up, tab_inv_up, tab_down, tab_inv_down,
-                           1.0, 1.0, false, Complex{Float64}[], Int32[])
+                           1.0, 1.0, false, Complex{Float64}[], Int32[], 0.0)
     if nprocs()>1
         gen_H_diag_parallel(h)
         gen_H_upper_parallel(h)
@@ -305,6 +306,7 @@ function hubbard(N_s::Int, n_up::Int, n_down::Int, v_symm::Array{Float64,2}, v_a
         gen_H_diag(h)
         gen_H_upper(h)
     end
+    h.norm = norm(h, Inf)
     h
 end
 
@@ -312,6 +314,11 @@ save_state(h::HubbardHamiltonian) = (h.fac_diag, h.fac_offdiag, h.matrix_times_m
 
 function restore_state!(h::HubbardHamiltonian, state)
     (h.fac_diag, h.fac_offdiag, h.matrix_times_minus_i) = state
+end
+
+function set_fac!(h::HubbardHamiltonian, fd::Real, fo::Number)
+    h.fac_diag = fd
+    h.fac_offdiag = fd
 end
 
 function set_fac_diag!(h::HubbardHamiltonian, f::Real)

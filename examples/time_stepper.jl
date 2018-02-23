@@ -1,6 +1,10 @@
 using Hubbard
 using FExpokit
 
+import FExpokit: get_lwsp_liwsp_expv 
+
+get_lwsp_liwsp_expv(h::HubbardHamiltonian, scheme, m::Integer=30) = get_lwsp_liwsp_expv(size(h, 2), m)
+
 struct CommutatorFreeScheme
     A::Array{Float64,2}
     c::Array{Float64,1}
@@ -14,13 +18,13 @@ CF4 = CommutatorFreeScheme(
     [1/2-sqrt(3)/6, 1/2+sqrt(3)/6])
 
 
+
 function step!(psi::Array{Complex{Float64},1}, h::HubbardHamiltonian, f::Function, 
                t::Real, dt::Real, scheme::CommutatorFreeScheme)
     state = save_state(h)
-    h.matrix_times_minus_i = false # this is done by expv
 
-    J,K = size(scheme.A)
-    for j=1:J
+    h.matrix_times_minus_i = false # this is done by expv
+    for j=1:size(scheme.A, 1)
         set_fac!(h, sum(scheme.A[j,:]), sum(scheme.A[j,:].*f.(t+dt*scheme.c)))
 
         expv!(psi, dt, h, psi, anorm=h.norm, 
@@ -32,7 +36,78 @@ function step!(psi::Array{Complex{Float64},1}, h::HubbardHamiltonian, f::Functio
     restore_state!(h, state)
 end    
 
+abstract type Magnus2 end
 
+function _Magnus2(w::Vector{Complex{Float64}}, v::Vector{Complex{Float64}},
+                  h::HubbardHamiltonian, f1::Complex{Float64}) 
+    h.matrix_times_minus_i = false
+    set_fac!(h, 1.0, f1)
+    A_mul_B!(w, h, v)
+end
+
+function step!(psi::Array{Complex{Float64},1}, h::HubbardHamiltonian, f::Function, 
+               t::Real, dt::Real, scheme::Type{Magnus2})
+    state = save_state(h)
+
+    f1 = f(t+0.5*dt)
+    expv!(psi, dt, _Magnus2, psi, h.norm,
+          args=(h, f1),
+          matrix_times_minus_i=true, hermitian=true,
+          wsp=h.wsp, iwsp=h.iwsp) 
+
+    restore_state!(h, state)
+end   
+
+
+abstract type Magnus4 end
+
+function get_lwsp_liwsp_expv(h::HubbardHamiltonian, scheme::Type{Magnus4}, m::Integer=30) 
+    (lw, liw) = get_lwsp_liwsp_expv(size(h, 2), m)
+    (lw+size(h, 2), liw)
+end
+
+
+function _Magnus4(w::Vector{Complex{Float64}}, v::Vector{Complex{Float64}},
+                  h::HubbardHamiltonian, c::Complex{Float64}, f1::Complex{Float64}, f2::Complex{Float64}) 
+    h.matrix_times_minus_i = false
+    n = size(h, 2)
+    s = unsafe_wrap(Array, pointer(h.wsp, length(h.wsp)-n+1), n, false)
+
+    set_fac!(h, 1.0, f1)
+    A_mul_B!(s, h, v)
+
+    w[:] = 0.5*s[:]
+    
+    set_fac!(h, 1.0, f2)
+    A_mul_B!(s, h, s)
+    
+    BLAS.axpy!(-c, s, w)
+
+    set_fac!(h, 1.0, f2)
+    A_mul_B!(s, h, v)
+
+    BLAS.axpy!(0.5, s, w)
+
+    set_fac!(h, 1.0, f1)
+    A_mul_B!(s, h, s)
+    
+    BLAS.axpy!(+c, s, w)
+end
+
+
+function step!(psi::Array{Complex{Float64},1}, h::HubbardHamiltonian, f::Function, 
+               t::Real, dt::Real, scheme::Type{Magnus4})
+    state = save_state(h)
+    c = dt*sqrt(3)/12*1im
+    f1 = f(t+dt*(1/2-sqrt(3)/6))
+    f2 = f(t+dt*(1/2+sqrt(3)/6))
+    expv!(psi, dt, _Magnus4, psi, h.norm,
+          args=(h, c, f1, f2),
+          matrix_times_minus_i=true, hermitian=true,
+          wsp=h.wsp, iwsp=h.iwsp) 
+
+    restore_state!(h, state)
+end   
 
 struct EquidistantTimeStepper
     h::HubbardHamiltonian
@@ -47,7 +122,7 @@ struct EquidistantTimeStepper
                  t0::Real, tend::Real, dt::Real; scheme=CF4)
 
         # allocate workspace
-        lwsp, liwsp = get_lwsp_liwsp_expv(size(h, 2))  
+        lwsp, liwsp = get_lwsp_liwsp_expv(h, scheme)  
         h.wsp = zeros(Complex{Float64}, lwsp)
         h.iwsp = zeros(Int32, liwsp)
         
@@ -81,7 +156,7 @@ function local_orders(h::HubbardHamiltonian, f::Function,
     tab = zeros(Float64, rows, 3)
 
     # allocate workspace
-    lwsp, liwsp = get_lwsp_liwsp_expv(size(h, 2))  
+    lwsp, liwsp = get_lwsp_liwsp_expv(h, scheme)  
     h.wsp = zeros(Complex{Float64}, lwsp)
     h.iwsp = zeros(Int32, liwsp)
 
@@ -116,6 +191,10 @@ function local_orders(h::HubbardHamiltonian, f::Function,
         dt1 = 0.5*dt1
         psi = copy(wf_save_initial_value)
     end
+    # deallocate workspace
+    h.wsp = Complex{Float64}[]        
+    h.iwsp =  Int32[]
+
     tab
 end
 
@@ -127,7 +206,7 @@ function local_orders_est(h::HubbardHamiltonian, f::Function, fd::Function,
     tab = zeros(Float64, rows, 5)
 
     # allocate workspace
-    lwsp, liwsp = get_lwsp_liwsp_expv(size(h, 2))  
+    lwsp, liwsp = get_lwsp_liwsp_expv(h, scheme)  
     h.wsp = zeros(Complex{Float64}, lwsp)
     h.iwsp = zeros(Int32, liwsp)
 
@@ -173,6 +252,10 @@ function local_orders_est(h::HubbardHamiltonian, f::Function, fd::Function,
         dt1 = 0.5*dt1
         psi = copy(wf_save_initial_value)
     end
+    # deallocate workspace
+    h.wsp = Complex{Float64}[]        
+    h.iwsp =  Int32[]
+
     tab
 end
 

@@ -21,12 +21,9 @@ function step!(psi::Array{Complex{Float64},1}, h::HubbardHamiltonian, f::Functio
 
     J,K = size(scheme.A)
     for j=1:J
-        set_fac_diag!(h,
-            sum(scheme.A[j,:])) 
-        set_fac_offdiag!(h, 
-            sum(scheme.A[j,:].*f.(t+dt*scheme.c)))
+        set_fac!(h, sum(scheme.A[j,:]), sum(scheme.A[j,:].*f.(t+dt*scheme.c)))
 
-        expv!(psi, dt, h, psi, anorm=dt*h.norm, 
+        expv!(psi, dt, h, psi, anorm=h.norm, 
               matrix_times_minus_i=true, hermitian=true,
               wsp=h.wsp, iwsp=h.iwsp) 
 
@@ -153,7 +150,7 @@ function local_orders_est(h::HubbardHamiltonian, f::Function, fd::Function,
         err = norm(psi-psi_ref)
         err_est = norm(psi-psi_ref-psi_est)
         if (row==1) 
-            @printf("%3i%12.3e%12.3e\n", row, Float64(dt1), Float64(err))
+            @printf("%3i%12.3e%12.3e  %19.3e\n", row, Float64(dt1), Float64(err), Float64(err_est))
             tab[row,1] = dt1
             tab[row,2] = err
             tab[row,3] = 0 
@@ -190,46 +187,47 @@ function Gamma2!(r::Vector{Complex{Float64}}, h::HubbardHamiltonian,
     s2 = unsafe_wrap(Array, pointer(h.wsp, 2*n+1), n, false)
 
     # s1 = B*u
-      set_fac!(h, 0.5, B)
+      set_fac!(h, 1.0, B)
       A_mul_B!(s1, h, u)
     # r = c_B*s1, c_B=1 
       r[:] = s1[:] # copy
     # s2 = A*u
       set_fac!(h, 0.0, A)
       A_mul_B!(s2, h, u)
-    # r += 1/2*c_A*s2, c_A=dt 
-      BLAS.axpy!(dt/2, s2, r)
+    # r += c_A*s2, c_A=dt 
+      BLAS.axpy!(dt, s2, r)
     # s2 = B*s2
-      set_fac!(h, 0.5, B)
+      set_fac!(h, 1.0, B)
       A_mul_B!(s2, h, s2)
-    # r += 1/2*c_BA*s2, c_BA=1/2*dt^2 
-      BLAS.axpy!(+dt^2/4, s2, r)
+    # r += c_BA*s2, c_BA=1/2*dt^2 
+      BLAS.axpy!(+dt^2/2, s2, r)
 
     # s2 = A*s1
       set_fac!(h, 0.0, A)
       A_mul_B!(s2, h, s1)
-    # r += 1/2*c_AB*s2, c_AB=-1/2*dt^2
-      BLAS.axpy!(-dt^2/4, s2, r)
+    # r += c_AB*s2, c_AB=-1/2*dt^2
+      BLAS.axpy!(-dt^2/2, s2, r)
 end
 
 
 function CF2_def(psi::Array{Complex{Float64},1}, psi_est::Array{Complex{Float64},1}, 
                  h::HubbardHamiltonian, f::Function, fd::Function, t::Real, dt::Real)
     state = save_state(h)
-    h.matrix_times_minus_i = false # this is done by expv
 
     n = size(h, 2)
     s = unsafe_wrap(Array, pointer(h.wsp, 1), n, false)
 
     # psi = S(dt)*psi
     set_fac!(h, 1.0, f(t+0.5*dt))
-    expv!(psi, dt, h, psi, anorm=dt*h.norm, 
+    h.matrix_times_minus_i = false # this is done by expv
+    expv!(psi, dt, h, psi, anorm=h.norm, 
           matrix_times_minus_i=true, hermitian=true,
           wsp=h.wsp, iwsp=h.iwsp)
-    
+    h.matrix_times_minus_i = true
+
     # psi_est = Gamma(dt)*psi-A(t+dt)*psi
     #   psi_est = Gamma(dt)*psi
-    Gamma2!(psi_est, h, psi, dt, f(t+0.5*dt), fd(t+0.5*dt))
+    Gamma2!(psi_est, h, psi, dt, f(t+0.5*dt), 0.5*fd(t+0.5*dt))
     #   s = A(t+dt)*psi
     set_fac!(h, 1.0, f(t+dt))
     LinAlg.A_mul_B!(s, h, psi)
@@ -237,14 +235,14 @@ function CF2_def(psi::Array{Complex{Float64},1}, psi_est::Array{Complex{Float64}
     psi_est[:] -= s[:]
 
     # psi_est = psi_est*(dt/3)
-    psi_est[:] *= dt/3.0
+    psi_est[:] *= dt/3
 
     restore_state!(h, state)
 end
 
 function Gamma4!(r::Vector{Complex{Float64}}, h::HubbardHamiltonian,
                  u::Vector{Complex{Float64}}, dt::Float64, 
-                 f::Complex{Float64}, fd::Complex{Float64})
+                 g::Float64, f::Complex{Float64}, fd::Complex{Float64})
     A = fd
     B = f
     n = size(h, 2)
@@ -252,66 +250,66 @@ function Gamma4!(r::Vector{Complex{Float64}}, h::HubbardHamiltonian,
     s2 = unsafe_wrap(Array, pointer(h.wsp, 2*n+1), n, false)
 
     # s1 = B*u
-      set_fac_offdiag!(h, B)
+      set_fac!(h, g, B)
       A_mul_B!(s1, h, u)
     # r = c_B*s1, c_B=1 
       r[:] = s1[:] # copy
     # s2 = A*u
-      set_fac_offdiag!(h, A)
+      set_fac!(h, 0.0, A)
       A_mul_B!(s2, h, u)
     # r += c_A*s2, c_A=dt 
       BLAS.axpy!(dt, s2, r)
     # s2 = B*s2
-      set_fac_offdiag!(h, B)
+      set_fac!(h, g, B)
       A_mul_B!(s2, h, s2)
     # r += c_BA*s2, c_BA=1/2*dt^2 
       BLAS.axpy!(dt^2/2, s2, r)
     # s2 = B*s2
-      set_fac_offdiag!(h, B)
+      set_fac!(h, g, B)
       A_mul_B!(s2, h, s2)
     # r += c_BBA*s2, c_BBA=1/6*dt^3
       BLAS.axpy!(dt^3/6, s2, r)
     # s2 = B*s2
-      set_fac_offdiag!(h, B)
+      set_fac!(h, g, B)
       A_mul_B!(s2, h, s2)
     # r += c_BBBA*s2, c_BBBA=1/24*dt^4
       BLAS.axpy!(dt^4/24, s2, r)
 
     # s2 = A*s1
-      set_fac_offdiag!(h, A)
+      set_fac!(h, 0.0, A)
       A_mul_B!(s2, h, s1)
     # r += c_AB*s2, c_AB=-1/2*dt^2
       BLAS.axpy!(-dt^2/2, s2, r)
     # s2 = B*s2
-      set_fac_offdiag!(h, B)
+      set_fac!(h, g, B)
       A_mul_B!(s2, h, s2)
     # r += c_BAB*s2, c_BAB=-1/3*dt^3
       BLAS.axpy!(-dt^3/3, s2, r)
     # s2 = B*s2
-      set_fac_offdiag!(h, B)
+      set_fac!(h, g, B)
       A_mul_B!(s2, h, s2)
     # r += c_BBAB*s2, c_BBAB=-1/8*dt^4
       BLAS.axpy!(-dt^4/8, s2, r)
 
     # s2 = B*s1
-      set_fac_offdiag!(h, B)
+      set_fac!(h, g, B)
       A_mul_B!(s2, h, s1)
     # s1 = A*s2
-      set_fac_offdiag!(h, A)
+      set_fac!(h, 0.0, A)
       A_mul_B!(s1, h, s2)
     # r += c_ABB*s1, c_ABB=1/6dt^3 
       BLAS.axpy!(dt^3/6, s1, r)
     # s1 = B*s1
-      set_fac_offdiag!(h, B)
+      set_fac!(h, g, B)
       A_mul_B!(s1, h, s1)
     # r += c_BABB*s1, c_BABB=1/8dt^4
       BLAS.axpy!(dt^4/8, s1, r)
 
     # s1 = B*s2
-      set_fac_offdiag!(h, B)
+      set_fac!(h, g, B)
       A_mul_B!(s1, h, s2)
     # s1 = A*s1
-      set_fac_offdiag!(h, A)
+      set_fac!(h, 0.0, A)
       A_mul_B!(s1, h, s1)
     # r += c_ABBB*s1, c_ABBB=-1/24*dt^4 
       BLAS.axpy!(-dt^4/24, s1, r)
@@ -321,7 +319,6 @@ end
 function CF4_def(psi::Array{Complex{Float64},1}, psi_est::Array{Complex{Float64},1}, 
                  h::HubbardHamiltonian, f::Function, fd::Function, t::Real, dt::Real)
     state = save_state(h)
-    h.matrix_times_minus_i = false # this is done by expv
 
     n = size(h, 2)
     s = unsafe_wrap(Array, pointer(h.wsp, 1), n, false)
@@ -332,39 +329,45 @@ function CF4_def(psi::Array{Complex{Float64},1}, psi_est::Array{Complex{Float64}
     [1/2-sqrt(3)/6, 1/2+sqrt(3)/6])     
     
     # psi = S_1(dt)*psi
-    set_fac_diag!(h,    sum(CF4.A[1,:])) 
-    set_fac_offdiag!(h, sum(CF4.A[1,:].*f.(t+dt*CF4.c)))
-    expv!(psi, dt, h, psi, anorm=dt*h.norm, 
+    set_fac!(h, sum(CF4.A[1,:]), sum(CF4.A[1,:].*f.(t+dt*CF4.c)))
+    h.matrix_times_minus_i = false # this is done by expv
+    expv!(psi, dt, h, psi, anorm=h.norm, 
           matrix_times_minus_i=true, hermitian=true,
           wsp=h.wsp, iwsp=h.iwsp)
+    h.matrix_times_minus_i = true
 
     # psi_est = Gamma_1(dt)*psi
-    set_fac_diag!(h, sum(CF4.A[1,:])) 
-    Gamma4!(psi_est, h, psi, dt, sum(CF4.A[1,:].*f.(t+dt*CF4.c)), sum(CF4.A[1,:].*fd.(t+dt*CF4.c)))
+    Gamma4!(psi_est, h, psi, dt, 
+            sum(CF4.A[1,:]),
+            sum(CF4.A[1,:].*f.(t+dt*CF4.c)), 
+            sum(CF4.c.*CF4.A[1,:].*fd.(t+dt*CF4.c)))
 
     # psi_est = S_2(dt)*psi_est
-    set_fac_diag!(h,    sum(CF4.A[2,:])) 
-    set_fac_offdiag!(h, sum(CF4.A[2,:].*f.(t+dt*CF4.c)))
-    expv!(psi_est, dt, h, psi_est, anorm=dt*h.norm, 
+    set_fac!(h, sum(CF4.A[2,:]), sum(CF4.A[2,:].*f.(t+dt*CF4.c)))
+    h.matrix_times_minus_i = false # this is done by expv
+    expv!(psi_est, dt, h, psi_est, anorm=h.norm, 
           matrix_times_minus_i=true, hermitian=true,
           wsp=h.wsp, iwsp=h.iwsp) 
+    h.matrix_times_minus_i = true
 
     # psi = S_2(dt)*psi
-    set_fac_diag!(h,    sum(CF4.A[2,:])) 
-    set_fac_offdiag!(h, sum(CF4.A[2,:].*f.(t+dt*CF4.c)))
-    expv!(psi, dt, h, psi, anorm=dt*h.norm, 
+    set_fac!(h, sum(CF4.A[2,:]), sum(CF4.A[2,:].*f.(t+dt*CF4.c)))
+    h.matrix_times_minus_i = false # this is done by expv
+    expv!(psi, dt, h, psi, anorm=h.norm, 
           matrix_times_minus_i=true, hermitian=true,
           wsp=h.wsp, iwsp=h.iwsp) 
+    h.matrix_times_minus_i = true
 
     # psi_est = psi_est+Gamma_2(dt)*psi-A(t+dt)*psi
     #  s = Gamma_2(dt)*psi
-    set_fac_diag!(h, sum(CF4.A[2,:])) 
-    Gamma4!(s, h, psi, dt, sum(CF4.A[2,:].*f.(t+dt*CF4.c)), sum(CF4.A[2,:].*fd.(t+dt*CF4.c)))
+    Gamma4!(s, h, psi, dt, 
+            sum(CF4.A[2,:]),
+            sum(CF4.A[2,:].*f.(t+dt*CF4.c)), 
+            sum(CF4.c.*CF4.A[2,:].*fd.(t+dt*CF4.c)))
     # psi_est = psi_est+s
     psi_est[:] += s[:]
     #  s = A(t+dt)*psi
-    set_fac_diag!(h, 1.0) 
-    set_fac_offdiag!(h, f(t+dt))
+    set_fac!(h, 1.0, f(t+dt))
     LinAlg.A_mul_B!(s, h, psi)
     #  psi_est = psi_est-s
     psi_est[:] -= s[:]

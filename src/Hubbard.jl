@@ -32,7 +32,10 @@ mutable struct HubbardHamiltonian
     fac_diag     :: Float64
     fac_offdiag  :: Complex{Float64}
     matrix_times_minus_i :: Bool
+    store_full_matrices  :: Bool 
+    matmul_inplace       :: Bool
 
+    wsp0 :: Array{Complex{Float64},1}  # workspace for A_mul_B
     wsp  :: Array{Complex{Float64},1}  # workspace for expokit
     iwsp :: Array{Int32,1}    # workspace for expokit
     norm :: Float64  # Inf-Norm of H for fac_diag = fac_offdiag = 1, needed by expokit
@@ -283,7 +286,8 @@ function gen_H_diag(h::HubbardHamiltonian)
 end
 
 
-function hubbard(N_s::Int, n_up::Int, n_down::Int, v_symm::Array{Float64,2}, v_anti::Array{Float64,2}, U::Real)
+function hubbard(N_s::Int, n_up::Int, n_down::Int, v_symm::Array{Float64,2}, v_anti::Array{Float64,2}, U::Real; 
+    store_full_matrices::Bool=false, matmul_inplace::Bool=false)
     N_up = binomial(N_s, n_up)
     N_down = binomial(N_s, n_down)
     N_psi = N_up*N_down
@@ -295,16 +299,22 @@ function hubbard(N_s::Int, n_up::Int, n_down::Int, v_symm::Array{Float64,2}, v_a
     else
         tab_down, tab_inv_down = gen_tabs(N_s, n_down)
     end
+    wsp0 = matmul_inplace?zeros(Complex{Float64}, N_psi):Complex{Float64}[]
     h =  HubbardHamiltonian(N_s, n_up, n_down, N_up, N_down, N_psi, N_nz,
                            v_symm, v_anti, U, Float64[], spzeros(1,1), spzeros(1,1),
                            tab_up, tab_inv_up, tab_down, tab_inv_down,
-                           1.0, 1.0, false, Complex{Float64}[], Int32[], 0.0)
+                           1.0, 1.0, false, store_full_matrices, matmul_inplace,
+                           wsp0, Complex{Float64}[], Int32[], 0.0)
     if nprocs()>1
         gen_H_diag_parallel(h)
         gen_H_upper_parallel(h)
     else
         gen_H_diag(h)
         gen_H_upper(h)
+    end
+    if store_full_matrices
+        h.H_upper_symm =  h.H_upper_symm + h.H_upper_symm'
+        h.H_upper_anti =  h.H_upper_anti - h.H_upper_anti'
     end
     h.norm = norm(h, Inf)
     h
@@ -355,14 +365,52 @@ import Base: eltype, size, norm
 function A_mul_B!(Y, h::HubbardHamiltonian, B)
     fac_symm = real(h.fac_offdiag)
     fac_anti = imag(h.fac_offdiag)
-    if fac_anti == 0.0
-        Y[:] = h.fac_diag*(h.H_diag.*B) + fac_symm*(h.H_upper_symm*B) + (fac_symm*B'*h.H_upper_symm)'
-    else    
-        Y[:] = h.fac_diag*(h.H_diag.*B) + fac_symm*(h.H_upper_symm*B) + (fac_symm*B'*h.H_upper_symm)' + 
-                                     1im*(fac_anti*(h.H_upper_anti*B) - (fac_anti*B'*h.H_upper_anti)')  
+    if !h.matmul_inplace 
+    if h.store_full_matrices
+        if fac_anti == 0.0
+            Y[:] = h.fac_diag*(h.H_diag.*B) + fac_symm*(h.H_upper_symm*B) 
+        else    
+            Y[:] = h.fac_diag*(h.H_diag.*B) + fac_symm*(h.H_upper_symm*B) + (1im*fac_anti)*(h.H_upper_anti*B) 
+        end
+    else
+        if fac_anti == 0.0
+            Y[:] = h.fac_diag*(h.H_diag.*B) + fac_symm*(h.H_upper_symm*B + At_mul_B(h.H_upper_symm, B)) 
+        else    
+            Y[:] = h.fac_diag*(h.H_diag.*B) + fac_symm*(h.H_upper_symm*B + At_mul_B(h.H_upper_symm, B)) +  
+                                        (1im*fac_anti)*(h.H_upper_anti*B - At_mul_B(h.H_upper_anti, B))
+        end
     end
     if h.matrix_times_minus_i
         Y[:] *= -1im
+    end
+
+    else
+
+    if h.fac_diag==0.0
+        Y[:] = 0.0
+    else
+        Y[:] = h.fac_diag*(h.H_diag.*B)
+    end
+    if fac_symm!=0.0
+        A_mul_B!(h.wsp0, h.H_upper_symm, B)
+        Y[:] += fac_symm*h.wsp0
+        if !h.store_full_matrices
+            At_mul_B!(h.wsp0, h.H_upper_symm, B)
+            Y[:] += fac_symm*h.wsp0
+        end
+    end
+    if fac_anti!=0.0
+        A_mul_B!(h.wsp0, h.H_upper_anti, B)
+        Y[:] += (1im*fac_anti)*h.wsp0
+        if !h.store_full_matrices
+            At_mul_B!(h.wsp0, h.H_upper_anti, B)
+            Y[:] -= (1im*fac_anti)*h.wsp0
+        end
+    end
+    if h.matrix_times_minus_i
+        Y[:] *= -1im
+    end
+
     end
 end
 
@@ -393,15 +441,18 @@ function norm(h::HubbardHamiltonian, p::Real=2)
     elseif !(p==1 || p==Inf)
         throw(ArgumentError("invalid p-norm p=$p. Valid: 1, Inf"))
     end
+    # TODO consider also H_upper_sym
     s = zeros(h.N_psi)
     for j = 1:h.N_psi
         for i = h.H_upper_symm.colptr[j]:h.H_upper_symm.colptr[j+1]-1
             s[j] += abs(h.H_upper_symm.nzval[i])
         end
     end
-    for i=1:length(h.H_upper_symm.nzval)
-        s[h.H_upper_symm.rowval[i]] += abs(h.H_upper_symm.nzval[i])
-    end    
+    if !h.store_full_matrices
+        for i=1:length(h.H_upper_symm.nzval)
+            s[h.H_upper_symm.rowval[i]] += abs(h.H_upper_symm.nzval[i])
+        end    
+    end
     s[:] *= abs(h.fac_offdiag) 
     s[:] += abs(h.fac_diag)*abs.(h.H_diag)
     maximum(s)

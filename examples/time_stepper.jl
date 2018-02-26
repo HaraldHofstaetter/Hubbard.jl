@@ -250,6 +250,8 @@ function step_estimated!(psi::Array{Complex{Float64},1}, psi_est::Array{Complex{
 
     # psi_est = psi_est*dt/(p+1)
     psi_est[:] *= dt/(scheme.p+1)
+
+    restore_state!(H, state)
 end
 
 
@@ -392,7 +394,7 @@ end
 Base.start(ets::EquidistantTimeStepper) = ets.t0
 
 function Base.done(ets::EquidistantTimeStepper, t) 
-    if (t >= ets.tend)
+    if t >= ets.tend
         # deallocate workspace
         set_wsp!(ets.H, 0)
         set_iwsp!(ets.H, 0)
@@ -537,7 +539,7 @@ struct AdaptiveTimeStepper
     function AdaptiveTimeStepper(H, 
                  f::Function, fd::Function,
                  psi::Array{Complex{Float64},1},
-                 t0::Real, tend::Real, dt::Real,  tol::Real; scheme=CF2_defectbased)
+                 t0::Real, tend::Real, dt::Real,  tol::Real; scheme=CF4)
         order = get_order(scheme)
 
         # allocate workspace
@@ -561,7 +563,13 @@ end
 Base.start(ats::AdaptiveTimeStepper) = AdaptiveTimeStepperState(ats.t0, ats.dt)
 
 function Base.done(ats::AdaptiveTimeStepper, state::AdaptiveTimeStepperState)
-  state.t >= ats.tend
+    if state.t >= ats.tend
+        # deallocate workspace
+        set_wsp!(ats.H, 0)
+        set_iwsp!(ats.H, 0)
+        return true
+    end
+    false
 end  
 
 function Base.next(ats::AdaptiveTimeStepper, state::AdaptiveTimeStepperState)
@@ -571,16 +579,16 @@ function Base.next(ats::AdaptiveTimeStepper, state::AdaptiveTimeStepperState)
 
     dt = state.dt
     dt0 = dt
-    copy!(ats.psi0, ats.psi)
+    ats.psi0[:] = ats.psi[:]
     err = 2.0
     while err>=1.0
         dt = min(dt, ats.tend-state.t)
         dt0 = dt
-        step_estimated!(ats.psi, ats.psi_est, ats.H, ats.f, ats.fd, ats.t0, dt, ats.scheme)
+        step_estimated!(ats.psi, ats.psi_est, ats.H, ats.f, ats.fd, state.t, dt, ats.scheme)
         err = norm(ats.psi_est)/ats.tol
         dt = dt*min(facmax, max(facmin, fac*(1.0/err)^(1.0/(ats.order+1))))
         if err>=1.0
-           copy!(ats.psi, ats.psi0)
+           ats.psi[:] = ats.psi0
            @printf("t=%17.9e  err=%17.8e  dt=%17.8e  rejected...\n", Float64(state.t), Float64(err), Float64(dt))
         end   
     end

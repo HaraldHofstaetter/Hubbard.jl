@@ -61,10 +61,15 @@ function Gamma!(r::Vector{Complex{Float64}}, H,
                 u::Vector{Complex{Float64}}, p::Int, dt::Float64, 
                 g::Float64, f::Complex{Float64}, fd::Complex{Float64},
                 s1::Vector{Complex{Float64}}, s2::Vector{Complex{Float64}})
+    
+    #s2=B*u
+    set_fac!(H, g, f);  A_mul_B!(s2, H, u)
+    r[:] = s2[:]    
+    
     if p>=1
         #s1=A*u
         set_fac!(H, 0.0, fd);  A_mul_B!(s1, H, u)
-        r[:] = dt*s1[:] 
+        r[:] += dt*s1[:] 
     end
     if p>=2
         #s1=B*s1=BAu
@@ -93,9 +98,6 @@ function Gamma!(r::Vector{Complex{Float64}}, H,
     end
 
     if p>=2
-        #s2=B*u
-        set_fac!(H, g, f);  A_mul_B!(s2, H, u)
-        r[:] += s2[:] 
         #s1=A*s2=ABu
         set_fac!(H, 0.0, fd);  A_mul_B!(s1, H, s2)
         r[:] -= (dt^2/2)*s1[:] 
@@ -186,13 +188,58 @@ end
 
 function step_estimated!(psi::Array{Complex{Float64},1}, psi_est::Array{Complex{Float64},1},
                  H, f::Function, fd::Function, t::Real, dt::Real,
-                 scheme::CommutatorFreeScheme)
+                 ::Type{Magnus2};
+                 symmetrized_defect::Bool=false)
+    state = save_state(H)
+    #n = size(H, 2)
+    #s = unsafe_wrap(Array, pointer(get_wsp(H), 1), n, false)  
+    psi0 = copy(psi) # save psi; TODO: use preallocated storage
+    s = copy(psi) # save psi; TODO: use preallocated storage
+    
+    # psi = S_1(dt)*psi
+    set_fac!(H, 1.0, f(t+0.5*dt))
+    set_matrix_times_minus_i!(H, false) # this is done by expv
+    expv!(psi, dt, H, psi, anorm=get_norm0(H), 
+          matrix_times_minus_i=true, hermitian=true,
+          wsp=get_wsp(H), iwsp=get_iwsp(H))
+    set_matrix_times_minus_i!(H, true)
+    
+    set_fac!(H, 1.0, f(t+0.5*dt))
+    set_matrix_times_minus_i!(H, true)
+    LinAlg.A_mul_B!(psi_est, H, psi)
+
+    set_fac!(H, 0.5, 0.5*f(t+dt))
+    set_matrix_times_minus_i!(H, true)
+    LinAlg.A_mul_B!(s, H, psi)
+    psi_est[:] -= s[:]
+    
+    set_fac!(H, 0.5, 0.5*f(t))
+    set_matrix_times_minus_i!(H, true)
+    LinAlg.A_mul_B!(s, H, psi0)
+    step!(s, H, f, t, dt, CF2) 
+    psi_est[:] -= s[:]
+
+    # psi_est = psi_est*dt/(p+1)
+    psi_est[:] *= dt/3
+    
+    restore_state!(H, state)
+end
+
+function step_estimated!(psi::Array{Complex{Float64},1}, psi_est::Array{Complex{Float64},1},
+                 H, f::Function, fd::Function, t::Real, dt::Real,
+                 scheme::CommutatorFreeScheme;
+                 symmetrized_defect::Bool=false)
     state = save_state(H)
 
     n = size(H, 2)
-    s = unsafe_wrap(Array, pointer(get_wsp(H), 1), n, false)
+    #s = unsafe_wrap(Array, pointer(get_wsp(H), 1), n, false)
+    s = copy(psi) # save psi  #TODO: use preallocated storage
     s1 = unsafe_wrap(Array, pointer(get_wsp(H), n+1),   n, false)
     s2 = unsafe_wrap(Array, pointer(get_wsp(H), 2*n+1), n, false)
+
+    if symmetrized_defect
+        psi0 = copy(psi) # save psi; TODO: use preallocated storage  
+    end
 
     # psi = S_1(dt)*psi
     set_fac!(H, sum(scheme.A[1,:]), sum(scheme.A[1,:].*f.(t+dt*scheme.c)))
@@ -203,11 +250,12 @@ function step_estimated!(psi::Array{Complex{Float64},1}, psi_est::Array{Complex{
     set_matrix_times_minus_i!(H, true)
 
     # psi_est = Gamma_1(dt)*psi
-    Gamma!(psi_est, H, psi, scheme.p, dt, 
-    #Gamma4!(psi_est, H, psi, dt, 
+    Gamma!(psi_est, H, psi, scheme.p, dt,
             sum(scheme.A[1,:]),
             sum(scheme.A[1,:].*f.(t+dt*scheme.c)), 
-            sum(scheme.c.*scheme.A[1,:].*fd.(t+dt*scheme.c)),
+            symmetrized_defect?
+               sum((scheme.c-0.5).*scheme.A[1,:].*fd.(t+dt*scheme.c)):
+               sum(scheme.c.*scheme.A[1,:].*fd.(t+dt*scheme.c)),
             s1, s2)
 
     for j=2:size(scheme.A, 1)
@@ -231,10 +279,11 @@ function step_estimated!(psi::Array{Complex{Float64},1}, psi_est::Array{Complex{
         # psi_est = psi_est+Gamma_j(dt)*psi-A(t+dt)*psi
         #  s = Gamma_j(dt)*psi
         Gamma!(s, H, psi, scheme.p, dt, 
-        #Gamma4!(s, H, psi, dt, 
                 sum(scheme.A[j,:]),
                 sum(scheme.A[j,:].*f.(t+dt*scheme.c)), 
-                sum(scheme.c.*scheme.A[j,:].*fd.(t+dt*scheme.c)),
+                symmetrized_defect?
+                   sum((scheme.c-0.5).*scheme.A[j,:].*fd.(t+dt*scheme.c)):
+                   sum(scheme.c.*scheme.A[j,:].*fd.(t+dt*scheme.c)),
                 s1, s2)
 
         # psi_est = psi_est+s
@@ -242,12 +291,26 @@ function step_estimated!(psi::Array{Complex{Float64},1}, psi_est::Array{Complex{
 
     end
    
-    #  s = A(t+dt)*psi
-    set_fac!(H, 1.0, f(t+dt))
-    LinAlg.A_mul_B!(s, H, psi)
-    #  psi_est = psi_est-s
-    psi_est[:] -= s[:]
-
+    if symmetrized_defect
+        #  s = A(t+dt)*psi
+        set_fac!(H, 1.0, f(t+dt))
+        LinAlg.A_mul_B!(s, H, psi)
+        #  psi_est = psi_est-1/2*s
+        psi_est[:] -= 0.5*s[:]
+        #  s = A(t)*psi0
+        set_fac!(H, 1.0, f(t))
+        LinAlg.A_mul_B!(s, H, psi0)
+        # s = S(t)*s
+        step!(s, H, f, t, dt, scheme) 
+        #psi_est = psi_est - 1/2*s
+        psi_est[:] -= 0.5*s[:]
+    else
+        #  s = A(t+dt)*psi
+        set_fac!(H, 1.0, f(t+dt))
+        LinAlg.A_mul_B!(s, H, psi)
+        #  psi_est = psi_est-s
+        psi_est[:] -= s[:]
+    end
     # psi_est = psi_est*dt/(p+1)
     psi_est[:] *= dt/(scheme.p+1)
 
@@ -463,6 +526,7 @@ function local_orders_est(H, f::Function, fd::Function,
                       psi::Array{Complex{Float64},1}, t0::Real, dt::Real; 
                       scheme=CF2_defectbased, reference_scheme=CF4, 
                       reference_steps=10,
+                      symmetrized_defect::Bool=false,
                       rows=8)
     tab = zeros(Float64, rows, 5)
 
@@ -481,7 +545,8 @@ function local_orders_est(H, f::Function, fd::Function,
     println("             dt         err      p       err_est      p")
     println("--------------------------------------------------------")
     for row=1:rows
-        step_estimated!(psi, psi_est, H, f, fd, t0, dt1, scheme)
+        step_estimated!(psi, psi_est, H, f, fd, t0, dt1, scheme,
+                        symmetrized_defect=symmetrized_defect)
         psi_ref = copy(wf_save_initial_value)
         dt1_ref = dt1/reference_steps
         for k=1:reference_steps

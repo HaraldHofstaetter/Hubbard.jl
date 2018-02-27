@@ -191,12 +191,21 @@ function step_estimated!(psi::Array{Complex{Float64},1}, psi_est::Array{Complex{
                  ::Type{Magnus2};
                  symmetrized_defect::Bool=false)
     state = save_state(H)
-    #n = size(H, 2)
-    #s = unsafe_wrap(Array, pointer(get_wsp(H), 1), n, false)  
-    psi0 = copy(psi) # save psi; TODO: use preallocated storage
-    s = copy(psi) # save psi; TODO: use preallocated storage
+
+    n = size(H, 2)
+    s = unsafe_wrap(Array, pointer(get_wsp(H), 1), n, false)
+
+    set_fac!(H, -0.5, -0.5*f(t))
+    set_matrix_times_minus_i!(H, true)
+    LinAlg.A_mul_B!(psi_est, H, psi)
+
+    set_fac!(H, 1.0, f(t+0.5*dt))
+    set_matrix_times_minus_i!(H, false) # this is done by expv
+    expv!(psi_est, dt, H, psi_est, anorm=get_norm0(H), 
+          matrix_times_minus_i=true, hermitian=true,
+          wsp=get_wsp(H), iwsp=get_iwsp(H))
+    set_matrix_times_minus_i!(H, true)
     
-    # psi = S_1(dt)*psi
     set_fac!(H, 1.0, f(t+0.5*dt))
     set_matrix_times_minus_i!(H, false) # this is done by expv
     expv!(psi, dt, H, psi, anorm=get_norm0(H), 
@@ -206,20 +215,14 @@ function step_estimated!(psi::Array{Complex{Float64},1}, psi_est::Array{Complex{
     
     set_fac!(H, 1.0, f(t+0.5*dt))
     set_matrix_times_minus_i!(H, true)
-    LinAlg.A_mul_B!(psi_est, H, psi)
+    LinAlg.A_mul_B!(s, H, psi)
+    psi_est[:] += s[:]
 
     set_fac!(H, 0.5, 0.5*f(t+dt))
     set_matrix_times_minus_i!(H, true)
     LinAlg.A_mul_B!(s, H, psi)
     psi_est[:] -= s[:]
     
-    set_fac!(H, 0.5, 0.5*f(t))
-    set_matrix_times_minus_i!(H, true)
-    LinAlg.A_mul_B!(s, H, psi0)
-    step!(s, H, f, t, dt, CF2) 
-    psi_est[:] -= s[:]
-
-    # psi_est = psi_est*dt/(p+1)
     psi_est[:] *= dt/3
     
     restore_state!(H, state)
@@ -232,16 +235,25 @@ function step_estimated!(psi::Array{Complex{Float64},1}, psi_est::Array{Complex{
     state = save_state(H)
 
     n = size(H, 2)
-    #s = unsafe_wrap(Array, pointer(get_wsp(H), 1), n, false)
-    s = copy(psi) # save psi  #TODO: use preallocated storage
+    s = unsafe_wrap(Array, pointer(get_wsp(H), 1), n, false)
     s1 = unsafe_wrap(Array, pointer(get_wsp(H), n+1),   n, false)
     s2 = unsafe_wrap(Array, pointer(get_wsp(H), 2*n+1), n, false)
 
     if symmetrized_defect
-        psi0 = copy(psi) # save psi; TODO: use preallocated storage  
+        set_fac!(H, -0.5, -0.5*f(t))
+        set_matrix_times_minus_i!(H, true) 
+        LinAlg.A_mul_B!(psi_est, H, psi)
+
+        set_fac!(H, sum(scheme.A[1,:]), sum(scheme.A[1,:].*f.(t+dt*scheme.c)))
+        set_matrix_times_minus_i!(H, false) # this is done by expv
+        expv!(psi_est, dt, H, psi_est, anorm=get_norm0(H), 
+              matrix_times_minus_i=true, hermitian=true,
+              wsp=get_wsp(H), iwsp=get_iwsp(H)) 
+        set_matrix_times_minus_i!(H, true)
+    else
+        psi_est[:] = 0.0
     end
 
-    # psi = S_1(dt)*psi
     set_fac!(H, sum(scheme.A[1,:]), sum(scheme.A[1,:].*f.(t+dt*scheme.c)))
     set_matrix_times_minus_i!(H, false) # this is done by expv
     expv!(psi, dt, H, psi, anorm=get_norm0(H), 
@@ -249,18 +261,17 @@ function step_estimated!(psi::Array{Complex{Float64},1}, psi_est::Array{Complex{
           wsp=get_wsp(H), iwsp=get_iwsp(H))
     set_matrix_times_minus_i!(H, true)
 
-    # psi_est = Gamma_1(dt)*psi
-    Gamma!(psi_est, H, psi, scheme.p, dt,
+    Gamma!(s, H, psi, scheme.p, dt,
             sum(scheme.A[1,:]),
             sum(scheme.A[1,:].*f.(t+dt*scheme.c)), 
             symmetrized_defect?
                sum((scheme.c-0.5).*scheme.A[1,:].*fd.(t+dt*scheme.c)):
                sum(scheme.c.*scheme.A[1,:].*fd.(t+dt*scheme.c)),
             s1, s2)
+    psi_est[:] += s[:]
 
     for j=2:size(scheme.A, 1)
 
-        # psi_est = S_j(dt)*psi_est
         set_fac!(H, sum(scheme.A[j,:]), sum(scheme.A[j,:].*f.(t+dt*scheme.c)))
         set_matrix_times_minus_i!(H, false) # this is done by expv
         expv!(psi_est, dt, H, psi_est, anorm=get_norm0(H), 
@@ -268,7 +279,6 @@ function step_estimated!(psi::Array{Complex{Float64},1}, psi_est::Array{Complex{
               wsp=get_wsp(H), iwsp=get_iwsp(H)) 
         set_matrix_times_minus_i!(H, true)
 
-        # psi = S_j(dt)*psi
         set_fac!(H, sum(scheme.A[j,:]), sum(scheme.A[j,:].*f.(t+dt*scheme.c)))
         set_matrix_times_minus_i!(H, false) # this is done by expv
         expv!(psi, dt, H, psi, anorm=get_norm0(H), 
@@ -276,8 +286,6 @@ function step_estimated!(psi::Array{Complex{Float64},1}, psi_est::Array{Complex{
               wsp=get_wsp(H), iwsp=get_iwsp(H)) 
         set_matrix_times_minus_i!(H, true)
     
-        # psi_est = psi_est+Gamma_j(dt)*psi-A(t+dt)*psi
-        #  s = Gamma_j(dt)*psi
         Gamma!(s, H, psi, scheme.p, dt, 
                 sum(scheme.A[j,:]),
                 sum(scheme.A[j,:].*f.(t+dt*scheme.c)), 
@@ -286,32 +294,18 @@ function step_estimated!(psi::Array{Complex{Float64},1}, psi_est::Array{Complex{
                    sum(scheme.c.*scheme.A[j,:].*fd.(t+dt*scheme.c)),
                 s1, s2)
 
-        # psi_est = psi_est+s
         psi_est[:] += s[:]
 
     end
    
     if symmetrized_defect
-        #  s = A(t+dt)*psi
-        set_fac!(H, 1.0, f(t+dt))
-        LinAlg.A_mul_B!(s, H, psi)
-        #  psi_est = psi_est-1/2*s
-        psi_est[:] -= 0.5*s[:]
-        #  s = A(t)*psi0
-        set_fac!(H, 1.0, f(t))
-        LinAlg.A_mul_B!(s, H, psi0)
-        # s = S(t)*s
-        step!(s, H, f, t, dt, scheme) 
-        #psi_est = psi_est - 1/2*s
-        psi_est[:] -= 0.5*s[:]
+        set_fac!(H, 0.5, 0.5*f(t+dt))
     else
-        #  s = A(t+dt)*psi
         set_fac!(H, 1.0, f(t+dt))
-        LinAlg.A_mul_B!(s, H, psi)
-        #  psi_est = psi_est-s
-        psi_est[:] -= s[:]
     end
-    # psi_est = psi_est*dt/(p+1)
+    LinAlg.A_mul_B!(s, H, psi)
+    psi_est[:] -= s[:]
+
     psi_est[:] *= dt/(scheme.p+1)
 
     restore_state!(H, state)

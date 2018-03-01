@@ -186,6 +186,13 @@ function Gamma!(r::Vector{Complex{Float64}}, H,
     end
 end
 
+abstract type Magnus2 end
+
+struct Magnus2Exponent
+    H
+    f::Complex{Float64}
+end
+
 function step_estimated!(psi::Array{Complex{Float64},1}, psi_est::Array{Complex{Float64},1},
                  H, f::Function, fd::Function, t::Real, dt::Real,
                  ::Type{Magnus2};
@@ -311,13 +318,6 @@ function step_estimated!(psi::Array{Complex{Float64},1}, psi_est::Array{Complex{
     restore_state!(H, state)
 end
 
-
-abstract type Magnus2 end
-
-struct Magnus2Exponent
-    H
-    f::Complex{Float64}
-end
 
 import Base.LinAlg: size 
 size(E::Magnus2Exponent, dim) = size(E.H, dim)

@@ -108,7 +108,7 @@ end
 
 abstract type DoPri45 end
 
-get_lwsp_liwsp_expv(H, scheme::Type{DoPri45}, m::Integer=30) = (7*size(H,2), 0)
+get_lwsp_liwsp_expv(H, scheme::Type{DoPri45}, m::Integer=30) = (8*size(H,2), 0)
 
 get_order(::Type{DoPri45}) = 4
 
@@ -116,6 +116,7 @@ function step_estimated!(psi::Array{Complex{Float64},1}, psi_est::Array{Complex{
                  H, f::Function, fd::Function, t::Real, dt::Real,
                  scheme::Type{DoPri45};
                  symmetrized_defect::Bool=false)
+    state = save_state(H)
       c = [0.0 1/5 3/10 4/5 8/9 1.0 1.0]
       A = [0.0         0.0        0.0         0.0      0.0          0.0     0.0
            1/5         0.0        0.0         0.0      0.0          0.0     0.0
@@ -127,7 +128,7 @@ function step_estimated!(psi::Array{Complex{Float64},1}, psi_est::Array{Complex{
      # e = [51279/57600 0.0        7571/16695  393/640 -92097/339200 187/2100 1/40]
        e = [71/57600    0.0       -71/16695    71/1920  -17253/339200 22/525 -1/40]    
       n = size(H, 2)
-      K = [unsafe_wrap(Array, pointer(get_wsp(H), j*n+1), n, false) for j=1:8]
+      K = [unsafe_wrap(Array, pointer(get_wsp(H), (j-1)*n+1), n, false) for j=1:8]
       s = K[8]
       for l=1:7
           s[:] = psi
@@ -150,6 +151,7 @@ function step_estimated!(psi::Array{Complex{Float64},1}, psi_est::Array{Complex{
       A_mul_B!(psi_est, H, s)
       #psi_est[:] -= psi[:]
       # TODO: K[7] can be reused as K[1] for the next step (FSAL, first same as last)
+    restore_state!(H, state)
 end
 
 function Omega!(w::Array{Complex{Float64},1}, v::Array{Complex{Float64},1}, H, args::Tuple,
